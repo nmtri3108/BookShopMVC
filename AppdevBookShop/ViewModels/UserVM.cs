@@ -9,5 +9,5 @@ public class UserVM
     [Required]
     public string Role { get; set; }
     public IEnumerable<SelectListItem> Rolelist { get; set; }
-    public User User { get; set; }
+    public User? User { get; set; }
 }

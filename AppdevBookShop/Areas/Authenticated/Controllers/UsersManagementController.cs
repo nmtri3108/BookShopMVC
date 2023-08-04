@@ -1,11 +1,8 @@
-﻿using System.Security.Claims;
-using AppdevBookShop.Contanst;
-using AppdevBookShop.Data;
+﻿using AppdevBookShop.Contanst;
+using AppdevBookShop.Services.IServices;
 using AppdevBookShop.ViewModels;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.Rendering;
 
 namespace AppdevBookShop.Areas.Authenticated.Controllers;
 
@@ -13,16 +10,11 @@ namespace AppdevBookShop.Areas.Authenticated.Controllers;
 [Authorize(Roles = SD.Admin_Role)]
 public class UsersManagementController : BaseController
 {
-    private readonly ApplicationDbContext _db;
-    private readonly UserManager<IdentityUser> _userManager;
-    private readonly RoleManager<IdentityRole> _roleManager;
+    private readonly IUserServices _userServices;
 
-    public UsersManagementController(ApplicationDbContext db, UserManager<IdentityUser> userManager,
-        RoleManager<IdentityRole> roleManager)
+    public UsersManagementController(IUserServices userServices)
     {
-        _userManager = userManager;
-        _db = db;
-        _roleManager = roleManager;
+        _userServices = userServices;
     }
 
     // GET
@@ -31,45 +23,15 @@ public class UsersManagementController : BaseController
     {
         // lấy id của người đăng nhập hiện tại
         var currentUserId = GetCurrentUserId();
+        var userList = await _userServices.GetAllUser(currentUserId);
 
-        //dùng để tránh trường hợp xóa nhầm role của mình
-        var userList = _db.Users.Where(u => u.Id != currentUserId);
-
-        foreach (var user in userList)
-        {
-            var roleTemp = await _userManager.GetRolesAsync(user);
-            user.Role = roleTemp.FirstOrDefault();
-        }
-
-        return View(userList.ToList());
+        return View(userList);
     }
 
     [HttpGet]
     public async Task<IActionResult> LockUnLock(string id)
     {
-        // lấy id đanng đăng nhập hiện tịa
-        var currentUserId = GetCurrentUserId();
-
-        // tìm kiếm user theo id
-        var userNeedToLock = _db.Users.Where(u => u.Id == id).First();
-        // chống tự khóa tài khoản chinh mình
-        if (userNeedToLock.Id == currentUserId)
-        {
-            //hien ra loi ban dang khoa tai khoan cua chinh minh
-        }
-
-        // trường hợp tại khoản đang bị khóa tiên hành mở khóa
-        if (userNeedToLock.LockoutEnd != null && userNeedToLock.LockoutEnd > DateTime.Now)
-        {
-            userNeedToLock.LockoutEnd = DateTime.Now;
-        }
-        // hiện tại tài khoản e ko bị khóa tiến hành khóa
-        else
-        {
-            userNeedToLock.LockoutEnd = DateTime.Now.AddYears(1);
-        }
-
-        _db.SaveChanges();
+        await _userServices.LockUnlock(GetCurrentUserId(), id);
         return RedirectToAction(nameof(Index));
     }
 
@@ -79,22 +41,7 @@ public class UsersManagementController : BaseController
     {
         if (id != null)
         {
-            // khởi tạo vm
-            UserVM userVm = new UserVM();
-            // get user data
-            var user = _db.Users.Find(id);
-            // gán dữ liệu cho obj user in UserVm
-            userVm.User = user;
-            // lấy role hiện tại của user được chọn
-            var roleTemp = await _userManager.GetRolesAsync(user);
-            // gán role hiện tại vào biến role
-            userVm.Role = roleTemp.First();
-            // lấy dữ liệu cho danh sách role
-            userVm.Rolelist = _roleManager.Roles.Select(x => x.Name).Select(i => new SelectListItem()
-            {
-                Text = i,
-                Value = i
-            });
+            var userVm = await _userServices.GetUserUpdate(id);
             return View(userVm);
         }
 
@@ -110,32 +57,12 @@ public class UsersManagementController : BaseController
             && userVm.User.FullName != string.Empty 
             && userVm.User.Role != String.Empty)
         {
-            // kiếm ra user cần update 
-            var user = _db.Users.Find(userVm.User.Id);
-            // update dữ liệu cho obj user
-            user.FullName = userVm.User.FullName;
-            user.PhoneNumber = userVm.User.PhoneNumber;
-            user.Address = userVm.User.Address;
-
-            // tìm ra role hiện tại của user
-            var oldRole = await _userManager.GetRolesAsync(user);
-            // remove user ra khỏi role của
-            await _userManager.RemoveFromRoleAsync(user, oldRole.First());
-            // add user vào role mới
-            await _userManager.AddToRoleAsync(user, userVm.Role);
-
-            // update và lưu thông tin
-            _db.Users.Update(user);
-            _db.SaveChanges();
+            await _userServices.Update(userVm);
             return RedirectToAction(nameof(Index));
         }
         
         // trường hợp một trong các trường trên bị lỗi
-        userVm.Rolelist = _roleManager.Roles.Select(x => x.Name).Select(i => new SelectListItem()
-        {
-            Text = i,
-            Value = i
-        });
+        userVm.Rolelist = _userServices.GetRoleDropDown();
         return View(userVm);
     }
 
@@ -143,20 +70,18 @@ public class UsersManagementController : BaseController
     [HttpGet]
     public async Task<IActionResult> Delete(string id)
     {
-        var user = await _userManager.FindByIdAsync(id);
-        if (user == null)
+        var isSuccessfully = await _userServices.Delete(id);
+        if (!isSuccessfully)
         {
             return NotFound();
         }
-       
-        await _userManager.DeleteAsync(user);
         return RedirectToAction(nameof(Index));
     }
 
     [HttpGet]
     public async Task<IActionResult> ConfirmEmail(string id)
     {
-        var user = _db.Users.Find(id);
+        var user = await _userServices.GetUserById(id);
 
         if (user == null)
         {
@@ -176,12 +101,10 @@ public class UsersManagementController : BaseController
     {
         if (ModelState.IsValid)
         {
-            var user = await _userManager.FindByEmailAsync(confirmEmailVm.Email);
-
-            var token = await _userManager.GeneratePasswordResetTokenAsync(user);
+            var (email, token) = await _userServices.ConfirmEmail(confirmEmailVm);
 
             return RedirectToAction("ResetPassword", "UsersManagement", 
-                new { token = token, email = user.Email });
+                new { token = token, email = email });
         }
 
         return View(confirmEmailVm);
@@ -208,15 +131,10 @@ public class UsersManagementController : BaseController
     {
         if (ModelState.IsValid)
         {
-            var user = await _userManager.FindByEmailAsync(resetPasswordViewModel.Email);
-            if (user != null)
+            var isSuccessFully = await _userServices.ResetPassword(resetPasswordViewModel);
+            if (isSuccessFully)
             {
-                var result = await _userManager.ResetPasswordAsync(user, resetPasswordViewModel.Token,
-                    resetPasswordViewModel.Password);
-                if (result.Succeeded)
-                {
-                    return RedirectToAction(nameof(Index));
-                }
+                return RedirectToAction(nameof(Index));
             }
         }
 

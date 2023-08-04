@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using AppdevBookShop.Data;
 using AppdevBookShop.Initializer;
+using AppdevBookShop.Services;
+using AppdevBookShop.Services.IServices;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -30,6 +32,10 @@ builder.Services.AddSession(options =>
     options.Cookie.IsEssential = true;
 });
 builder.Services.AddHttpContextAccessor();
+
+builder.Services.AddScoped<IUserServices, UserServices>();
+
+
 
 var app = builder.Build();
 
